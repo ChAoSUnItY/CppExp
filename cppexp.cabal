@@ -25,8 +25,8 @@ source-repository head
 
 library
   exposed-modules:
-      Lib
-      Token
+      CppExp
+      CppExp.Token
   other-modules:
       Paths_cppexp
   autogen-modules:

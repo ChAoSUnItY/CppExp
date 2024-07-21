@@ -1,14 +1,15 @@
-module Token (module Token) where
+module CppExp.Token (Token (..), identT, openParenthesisT, closeParenthesisT, commaT) where
 
-data Token = Ident String
-           | Comma
-           | Ellipsis
-           | OpenParethesis
-           | CloseParenthesis
-           | DirectiveStart
-           | Backslash
-           | Newline
-           deriving (Show)
+data Token
+  = Ident String
+  | Comma
+  | Ellipsis
+  | OpenParethesis
+  | CloseParenthesis
+  | DirectiveStart
+  | Backslash
+  | Newline
+  deriving (Show)
 
 identT :: Token -> Bool
 identT (Ident _) = True

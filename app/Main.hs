@@ -1,6 +1,6 @@
 module Main (main) where
 
-import Lib
+import CppExp
 
 main :: IO ()
 main = putStrLn "LEL"
