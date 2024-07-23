@@ -4,7 +4,9 @@ import CppExp.Token (Token (..))
 
 macroDefOnly1 :: [Token]
 macroDefOnly1 =
-  [ Ident "a",
+  [ DirectiveStart,
+    Ident "define",
+    Ident "a",
     OpenParethesis,
     Ident "gg",
     Comma,
