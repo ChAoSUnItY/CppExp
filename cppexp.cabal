@@ -26,6 +26,7 @@ source-repository head
 library
   exposed-modules:
       CppExp
+      CppExp.TestSuite
       CppExp.Token
   other-modules:
       Paths_cppexp

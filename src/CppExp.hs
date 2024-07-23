@@ -1,7 +1,8 @@
 module CppExp (module CppExp) where
 
-import Control.Monad.State (State, get, put)
+import Control.Monad.State (State, evalState, execState, get, modify, put, runState)
 import CppExp.Token (Token (..), closeParenthesisT, commaT)
+import Data.Bifunctor (Bifunctor (second))
 import Data.List (find)
 
 type Var = String
@@ -144,4 +145,47 @@ parseMacroDefinition = do
       Just . Alias defName' <$> parseAliasRep
     _ -> return Nothing
 
--- exec :: SymTable -> [Token] -> [Token]
+parseDirective :: Parser (Maybe ())
+parseDirective = do
+  (tks, st) <- get
+  case tks of
+    (Ident "define" : tks') -> do
+      put (tks', st)
+      def <- parseMacroDefinition
+      case def of
+        (Just def') -> do
+          modify (second (defineSym def'))
+          return $ Just ()
+        Nothing ->
+          return Nothing
+    _ ->
+      return Nothing
+
+exec' :: Parser (Maybe [Token])
+exec' = do
+  (tks, st) <- get
+  case tks of
+    (DirectiveStart : tks') -> do
+      put (tks', st)
+      result <- parseDirective
+      case result of
+        (Just ()) ->
+          exec'
+        Nothing ->
+          return Nothing
+    -- (Ident ident : tks') ->
+    -- TODO: Execute replacement
+    (tk : tks') -> do
+      put (tks', st)
+      liftA2 (:) (Just tk) <$> exec'
+    [] ->
+      return $ Just []
+
+runCpp :: [Token] -> (Maybe [Token], ([Token], SymTable))
+runCpp tks = runState exec' (tks, emptySymTable)
+
+evalCpp :: [Token] -> Maybe [Token]
+evalCpp tks = evalState exec' (tks, emptySymTable)
+
+execCpp :: [Token] -> ([Token], SymTable)
+execCpp tks = execState exec' (tks, emptySymTable)
