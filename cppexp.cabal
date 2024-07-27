@@ -26,8 +26,11 @@ source-repository head
 library
   exposed-modules:
       CppExp
+      CppExp.Data
+      CppExp.Parser
       CppExp.TestSuite
       CppExp.Token
+      CppExp.Utils
   other-modules:
       Paths_cppexp
   autogen-modules:

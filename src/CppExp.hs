@@ -4,6 +4,7 @@ import Control.Monad.State (State, evalState, execState, get, modify, put, runSt
 import CppExp.Token (Token (..), closeParenthesisT, commaT)
 import Data.Bifunctor (Bifunctor (second))
 import Data.List (find)
+import CppExp.Parser (Parser)
 
 type Var = String
 
@@ -40,9 +41,9 @@ findDef :: Token -> SymTable -> Maybe Def
 findDef (Ident ident) st = find (\d -> getDefName d == ident) st
 findDef _ _ = Nothing
 
-type Parser a = State ([Token], SymTable) a
+type Parser' a = State ([Token], SymTable) a
 
-acceptToken :: (Token -> Bool) -> Parser Bool
+acceptToken :: (Token -> Bool) -> Parser' Bool
 acceptToken tkPred = do
   (tks, st) <- get
   case tks of
@@ -56,7 +57,7 @@ acceptToken tkPred = do
           return False
     _ -> return False
 
-identToken :: Parser (Maybe String)
+identToken :: Parser' (Maybe String)
 identToken = do
   (tks, st) <- get
   case tks of
@@ -65,7 +66,7 @@ identToken = do
       return $ Just ident
     _ -> return Nothing
 
-parseMacroParam :: Parser (Maybe MacroParam)
+parseMacroParam :: Parser' (Maybe MacroParam)
 parseMacroParam = do
   (tks, st) <- get
   case tks of
@@ -85,7 +86,7 @@ parseMacroParam = do
     _ ->
       return Nothing
 
-parseAliasRep :: Parser [Token]
+parseAliasRep :: Parser' [Token]
 parseAliasRep = do
   (tks, st) <- get
   case tks of
@@ -99,7 +100,7 @@ parseAliasRep = do
     [] -> do
       return []
 
-parseMacroRep :: [Var] -> Parser (Maybe [Either Token Var])
+parseMacroRep :: [Var] -> Parser' (Maybe [Either Token Var])
 parseMacroRep vars = do
   (tks, st) <- get
   case tks of
@@ -125,7 +126,7 @@ parseMacroRep vars = do
     _ -> do
       return Nothing
 
-parseMacroDefinition :: Parser (Maybe Def)
+parseMacroDefinition :: Parser' (Maybe Def)
 parseMacroDefinition = do
   defName <- identToken
   (tks, st) <- get
@@ -145,7 +146,7 @@ parseMacroDefinition = do
       Just . Alias defName' <$> parseAliasRep
     _ -> return Nothing
 
-parseDirective :: Parser (Maybe ())
+parseDirective :: Parser' (Maybe ())
 parseDirective = do
   (tks, st) <- get
   case tks of
@@ -161,7 +162,7 @@ parseDirective = do
     _ ->
       return Nothing
 
-exec' :: Parser (Maybe [Token])
+exec' :: Parser' (Maybe [Token])
 exec' = do
   (tks, st) <- get
   case tks of
