@@ -28,6 +28,7 @@ library
       CppExp
       CppExp.Data
       CppExp.Parser
+      CppExp.Replace
       CppExp.TestSuite
       CppExp.Token
       CppExp.Utils

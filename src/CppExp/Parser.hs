@@ -1,11 +1,12 @@
 module CppExp.Parser (module CppExp.Parser) where
 
-import Prelude hiding (fail, (*>), (<*), (<*>))
-import CppExp.Data (PState, MacroParam (..), Def (Alias, Macro), Var, mapVar, defineSym)
+import Prelude hiding (fail)
+import CppExp.Data (PState, MacroParam (..), Def (Alias, Macro), Var, mapVar, defineSym, newState)
 import Data.Char (isAlphaNum, isAlpha)
-import CppExp.Token (Token (..))
+import CppExp.Token (Token (..), tokenToString)
 import qualified Data.Bifunctor as Bifunctor
 import CppExp.Utils (uncurry3r)
+import CppExp.Replace (tryReplaceAlias)
 
 type Parser a s b = ([a], s) -> [(([a], s), b)]
 
@@ -71,19 +72,23 @@ sp p = p . Bifunctor.first (dropWhile (== ' '))
 just :: Parser a s r -> Parser a s r
 just p = filter (null . fst . fst) . p
 
-infixr 5 <@, <@-, <@=
+infixr 5 <@, <@-, <@~, <@=
 
 -- Result transformer
 (<@) :: Parser a s r -> (r -> v) -> Parser a s v
-(p <@ f) xs = [(ys, f v) | (ys, v) <- p xs]
+(p <@ f) xs = [(ys, f r) | (ys, r) <- p xs]
 
 -- State transformer
 (<@-) :: Parser a s r -> (s -> s) -> Parser a s r
-(p <@- f) xs = [((a, f s), v) | ((a, s), v) <- p xs]
+(p <@- f) xs = [((a, f s), r) | ((a, s), r) <- p xs]
+
+-- Result by state transformer
+(<@~) :: Parser a s r -> ((s, r) -> v) -> Parser a s v
+(p <@~ f) xs = [(ys, f (s, r)) | (ys@(_, s), r) <- p xs]
 
 -- State/Result transformer
 (<@=) :: Parser a s r -> ((s, r) -> (s, v)) -> Parser a s v
-(p <@= f) xs = [ ((a, s'), v) 
+(p <@= f) xs = [ ((a, s'), v)
                  | ((a, s), r) <- p xs,
                    (s', v) <- [f (s, r)]
                ]
@@ -105,63 +110,82 @@ first p xs | null r = []
 
 -- Actual Parser
 
-newline :: Parser Char s ()
+type CppParser r = Parser Char PState r
+
+newline :: CppParser ()
 newline = symbol '\n' &> epsilon
 
-backslash :: Parser Char s ()
+backslash :: CppParser ()
 backslash = symbol '\\' &> epsilon
 
-comma :: Parser Char s ()
+ellipsis :: CppParser ()
+ellipsis = token "..." &> epsilon
+
+comma :: CppParser ()
 comma = symbol ',' &> epsilon
 
-lparen :: Parser Char s ()
+lparen :: CppParser ()
 lparen = symbol '(' &> epsilon
 
-rparen :: Parser Char s ()
+rparen :: CppParser ()
 rparen = symbol ')' &> epsilon
 
-directiveStart :: Parser Char s ()
+directiveStart :: CppParser ()
 directiveStart = symbol '#' &> epsilon
 
-ident :: Parser Char s String
+ident :: CppParser String
 ident = first $ (satisfy isAlpha <|> symbol '_') <&> many (satisfy isAlphaNum) <@ uncurry (:)
 
-ppToken :: Parser Char s Token
+ppToken :: CppParser Token
 ppToken = comma &> succeed Comma
         <|> ident <@ Ident
 
-anyToken :: Parser Char s Token
+identReplacable :: Parser Char PState [Token]
+identReplacable state@(_, pstate)
+        = sp ident <@ flip tryReplaceAlias pstate . Ident
+        $ state
+
+-- | Accepts any legal tokens with few exceptions:
+--   @Ident@ 
+anyToken :: CppParser Token
 anyToken = newline &> succeed Newline
          <|> backslash &> succeed Backslash
+         <|> directiveStart &> succeed DirectiveStart
+         <|> ellipsis &> succeed Ellipsis
          <|> comma &> succeed Comma
          <|> lparen &> succeed OpenParethesis
          <|> rparen &> succeed CloseParenthesis
-         <|> ident <@ Ident
 
-macroParams :: Parser Char PState MacroParam
-macroParams = sp (token "...") <@ const VarArgs
+macroParams :: CppParser MacroParam
+macroParams = sp ellipsis &> succeed VarArgs
             <|> sp ident <&> sp comma &> macroParams <@ uncurry Param
             <|> sp ident <@ flip Param EndOfParams
 
-aliasTkList :: Parser Char PState [Token]
-aliasTkList = sp newline  <@ const []
+aliasTkList :: CppParser [Token]
+aliasTkList = sp newline  &> succeed []
             <|> sp ppToken <&> sp aliasTkList <@ uncurry (:)
 
-macroTkList :: Parser Char PState [Either Token Var]
-macroTkList pstate@(_, state)
+macroTkList :: CppParser [Either Token Var]
+macroTkList state@(_, pstate)
         = sp newline <@ const []
         <|> sp backslash &> sp newline &> macroTkList
-        <|> sp ppToken <&> macroTkList <@ uncurry (:) . Bifunctor.first (`mapVar` state)
-        $ pstate
+        <|> sp ppToken <&> macroTkList <@ uncurry (:) . Bifunctor.first (`mapVar` pstate)
+        $ state
 
-macroDef :: Parser Char PState Def
+macroDef :: CppParser Def
 macroDef = sp ident <&> aliasTkList <@ uncurry Alias
          <|> sp ident <&> lparen &> macroParams <&> sp rparen &> macroTkList <@ uncurry3r Macro
 
-directive :: Parser Char PState ()
+directive :: CppParser ()
 directive = sp (token "define") &> macroDef <@= (\(s, def) -> (defineSym def s, ()))
 
-cpp :: Parser Char PState [Token]
+cpp :: CppParser [Token]
 cpp = sp directiveStart &> directive &> cpp
+    <|> identReplacable <&> cpp <@ uncurry (++)
     <|> sp anyToken <&> cpp <@ uncurry (:)
     <|> succeed []
+
+prettyCpp :: String -> String
+prettyCpp input = unwords $ map tokenToString output
+    where
+      output = snd $ head $ just cpp (input, newState)
