@@ -133,8 +133,16 @@ rparen = symbol ')' &> epsilon
 directiveStart :: CppParser ()
 directiveStart = symbol '#' &> epsilon
 
+identStart :: CppParser Char
+identStart = satisfy isAlpha
+           <|> symbol '_'
+
+identRemain :: CppParser Char
+identRemain = satisfy isAlphaNum
+            <|> symbol '_'
+
 ident :: CppParser String
-ident = first $ (satisfy isAlpha <|> symbol '_') <&> many (satisfy isAlphaNum) <@ uncurry (:)
+ident = first $ identStart <&> many identRemain <@ uncurry (:)
 
 ppToken :: CppParser Token
 ppToken = comma &> succeed Comma
