@@ -1,12 +1,13 @@
 module CppExp.Parser (module CppExp.Parser) where
 
 import Prelude hiding (fail)
-import CppExp.Data (PState, MacroParam (..), Def (Alias, Macro), Var, mapVar, defineSym, newState)
+import CppExp.Data (PState, MacroParam (..), Def (Alias, Macro), Var, mapVar, defineSym, newState, defineMacroParams)
 import Data.Char (isAlphaNum, isAlpha)
 import CppExp.Token (Token (..), tokenToString)
 import qualified Data.Bifunctor as Bifunctor
 import CppExp.Utils (uncurry3r)
-import CppExp.Replace (tryReplaceAlias)
+import CppExp.Replace (tryReplace)
+import Data.Maybe (fromMaybe)
 
 type Parser a s b = ([a], s) -> [(([a], s), b)]
 
@@ -72,11 +73,17 @@ sp p = p . Bifunctor.first (dropWhile (== ' '))
 just :: Parser a s r -> Parser a s r
 just p = filter (null . fst . fst) . p
 
-infixr 5 <@, <@-, <@~, <@=
+infixr 5 <@, <@?, <@-, <@~, <@=, <@?=
 
 -- Result transformer
 (<@) :: Parser a s r -> (r -> v) -> Parser a s v
 (p <@ f) xs = [(ys, f r) | (ys, r) <- p xs]
+
+(<@?) :: Parser a s r -> (r -> Maybe v) -> Parser a s v
+(p <@? f) xs = [ (ys, v)
+                 | (ys, r) <- p xs
+                 , Just v <- [f r]
+               ]
 
 -- State transformer
 (<@-) :: Parser a s r -> (s -> s) -> Parser a s r
@@ -89,9 +96,15 @@ infixr 5 <@, <@-, <@~, <@=
 -- State/Result transformer
 (<@=) :: Parser a s r -> ((s, r) -> (s, v)) -> Parser a s v
 (p <@= f) xs = [ ((a, s'), v)
-                 | ((a, s), r) <- p xs,
-                   (s', v) <- [f (s, r)]
+                 | ((a, s), r) <- p xs
+                 , (s', v) <- [f (s, r)]
                ]
+
+(<@?=) :: Parser a s r -> ((s, r) -> Maybe (s, v)) -> Parser a s v
+(p <@?= f) xs = [ ((a, s'), v)
+                  | ((a, s), r) <- p xs
+                  , Just (s', v) <- [f (s, r)]
+                ]
 
 -- Parser for zero or more
 many :: Parser a s r -> Parser a s [r]
@@ -148,10 +161,22 @@ ppToken :: CppParser Token
 ppToken = comma &> succeed Comma
         <|> ident <@ Ident
 
-identReplacable :: Parser Char PState [Token]
+identReplacable :: CppParser [Token]
 identReplacable state@(_, pstate)
-        = sp ident <@ flip tryReplaceAlias pstate . Ident
-        $ state
+        = first
+        ( sp ident <&> sp lparen &> sp macroArgs <& sp rparen <@? (\(macroName, args) -> tryReplace macroName (Just args) pstate)
+        <|> sp ident <@? (\aliasName -> tryReplace aliasName Nothing pstate)
+        ) state
+
+macroArgs :: CppParser [[Token]]
+macroArgs = sp macroArgAnyToken <&> sp comma &> macroArgs <@ uncurry (:)
+          <|> sp macroArgAnyToken <@ (: [])
+
+macroArgAnyToken :: CppParser [Token]
+macroArgAnyToken
+        = lparen &> macroArgAnyToken <&> rparen &> macroArgAnyToken <@ (\(inner, outer) -> OpenParethesis : inner ++ [CloseParenthesis] ++ outer)
+        <|> ident <&> macroArgAnyToken <@ uncurry (:) . Bifunctor.first Ident
+        <|> succeed []
 
 -- | Accepts any legal tokens with few exceptions:
 --   @Ident@ 
@@ -165,7 +190,10 @@ anyToken = newline &> succeed Newline
          <|> rparen &> succeed CloseParenthesis
 
 macroParams :: CppParser MacroParam
-macroParams = sp ellipsis &> succeed VarArgs
+macroParams = macroParams' <@= (\(pst, params) -> (defineMacroParams params pst, params))
+
+macroParams' :: CppParser MacroParam
+macroParams' = sp ellipsis &> succeed VarArgs
             <|> sp ident <&> sp comma &> macroParams <@ uncurry Param
             <|> sp ident <@ flip Param EndOfParams
 
@@ -181,7 +209,8 @@ macroTkList state@(_, pstate)
         $ state
 
 macroDef :: CppParser Def
-macroDef = sp ident <&> aliasTkList <@ uncurry Alias
+macroDef = first
+         $ sp ident <&> aliasTkList <@ uncurry Alias
          <|> sp ident <&> lparen &> macroParams <&> sp rparen &> macroTkList <@ uncurry3r Macro
 
 directive :: CppParser ()

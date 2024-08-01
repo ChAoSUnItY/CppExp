@@ -16,9 +16,15 @@ data MacroParam
     | VarArgs
     deriving (Show)
 
+-- data MacroArgument
+--     = Param Var [Token] MacroParam
+--     | EndOfParams
+--     | VarArgs [Token]
+
 collectVars :: MacroParam -> [Var]
 collectVars (Param var remain) = var : collectVars remain
-collectVars _ = []
+collectVars VarArgs = ["__VAR_ARGS__"]
+collectVars EndOfParams = []
 
 data Def
     = Alias DefName [Token]
@@ -42,13 +48,25 @@ type SymTable = [Def]
 findDef' :: DefName -> SymTable -> Maybe Def
 findDef' defName = find ((== defName) . getDefName)
 
-removeDef' :: (Def -> Bool) -> DefName -> SymTable -> Maybe (Def, SymTable)
-removeDef' p defName st
+findDefByPred' :: (Def -> Bool) -> DefName -> SymTable -> Maybe Def
+findDefByPred' p defName = find(liftM2 (&&) p ((== defName) . getDefName))
+
+removeDef' :: DefName -> SymTable -> Maybe (Def, SymTable)
+removeDef' defName st
+    = case def of
+        Just def' -> Just (def', st')
+        Nothing   -> Nothing
+    where
+        def = findDef' defName st
+        st' = removeFirst ((== defName) . getDefName) st 
+
+removeDefByPred' :: (Def -> Bool) -> DefName -> SymTable -> Maybe (Def, SymTable)
+removeDefByPred' p defName st
     = case def of
         Just def' -> Just (def', st')
         Nothing  -> Nothing
     where
-        def = findDef' defName st
+        def = findDefByPred' p defName st
         st' = removeFirst (liftM2 (&&) p ((== defName) . getDefName)) st
 
 type VarScope = [Var]
@@ -62,15 +80,19 @@ newState = PState [] []
 findDef :: String -> PState -> Maybe Def
 findDef ident (PState st _) = findDef' ident st
 
-removeDef :: (Def -> Bool) -> DefName -> PState -> Maybe (Def, PState)
-removeDef p defName (PState st vs)
-    = removeDef' p defName st >>= Just . second (`PState` vs)
+removeDef :: DefName -> PState -> Maybe (Def, PState)
+removeDef defName (PState st vs)
+    = removeDef' defName st >>= Just . second (`PState` vs)
+
+removeDefByPred :: (Def -> Bool) -> DefName -> PState -> Maybe (Def, PState)
+removeDefByPred p defName (PState st vs)
+    = removeDefByPred' p defName st >>= Just . second (`PState` vs)
 
 removeAlias :: DefName -> PState -> Maybe (Def, PState)
-removeAlias = removeDef isAlias
+removeAlias = removeDefByPred isAlias
 
 removeMacro :: DefName -> PState -> Maybe (Def, PState)
-removeMacro = removeDef isMacro
+removeMacro = removeDefByPred isMacro
 
 mapVar :: Token -> PState -> Either Token Var
 mapVar ident'@(Ident ident) (PState _ vs)
@@ -80,6 +102,12 @@ mapVar ident'@(Ident ident) (PState _ vs)
     where
         p = find (== ident) vs
 mapVar t _ = Left t
+
+defineVars :: [Var] -> PState -> PState
+defineVars vars (PState st _) = PState st vars
+
+defineMacroParams :: MacroParam -> PState -> PState
+defineMacroParams macroParams = defineVars (collectVars macroParams)
 
 defineSym :: Def -> PState -> PState
 defineSym def (PState st vs) = PState (def : st) vs
