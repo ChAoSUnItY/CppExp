@@ -2,16 +2,16 @@ module CppExp.Parser (module CppExp.Parser) where
 
 import Prelude hiding (fail)
 import CppExp.Data (
-    PState (PState), 
-    MacroParam (..), 
-    Def (..), 
-    Var, 
-    mapVar, 
-    defineSym, 
-    newState, 
-    defineMacroParams, 
-    removeAlias, 
-    removeMacro
+    PState (PState),
+    MacroParam (..),
+    Def (..),
+    Var,
+    mapVar,
+    defineSym,
+    newState,
+    defineMacroParams,
+    removeAlias,
+    removeMacro, applicable
     )
 import Data.Char (isAlphaNum, isAlpha)
 import CppExp.Token (Token (..), tokenToString, tokensToString)
@@ -210,16 +210,20 @@ tryExpand defName args pst
         Just args' -> let macro = removeMacro defName pst in
             case macro of
                 Just (Macro _ params tks, pst') ->
-                    let result = expandMacro tks args' (defineMacroParams params pst') in
-                        case result of
-                            Just tks' -> Just $ snd $ head $ just cpp (tokensToString tks', pst')
-                            Nothing   -> Nothing
-                _                               -> Nothing
+                    if applicable args' params then
+                        let result = expandMacro tks args' (defineMacroParams params pst') in
+                            case result of
+                                Just tks' -> 
+                                    Just $ snd $ head $ just cpp (tokensToString tks', pst')
+                                Nothing   -> Nothing
+                    else
+                        error $ "Fatal: Argument count is not applicable to macro `" ++ defName ++ "`"
+                _ -> Nothing
         Nothing    -> let alias = removeAlias defName pst in
             case alias of
                 Just (Alias _ tks, pst') ->
                     Just $ snd $ head $ just cpp (tokensToString tks, pst')
-                _                     -> Nothing
+                _ -> Nothing
 
 expandMacro :: [Either Token Var] -> [[Token]] -> PState -> Maybe [Token]
 expandMacro [] _ _ = Just []

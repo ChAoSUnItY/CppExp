@@ -2,7 +2,8 @@ module CppExp.Data (
     PState (PState), 
     MacroParam (..), 
     Def (..), 
-    Var, 
+    Var,
+    applicable,
     mapVar, 
     defineSym, 
     newState, 
@@ -26,15 +27,31 @@ data MacroParam
     | VarArgs
     deriving (Show)
 
--- data MacroArgument
---     = Param Var [Token] MacroParam
---     | EndOfParams
---     | VarArgs [Token]
-
 collectVars :: MacroParam -> [Var]
 collectVars (Param var remain) = var : collectVars remain
 collectVars VarArgs = ["__VAR_ARGS__"]
 collectVars EndOfParams = []
+
+hasVarArgs :: MacroParam -> Bool
+hasVarArgs (Param _ remain) = hasVarArgs remain
+hasVarArgs VarArgs = True
+hasVarArgs EndOfParams = False
+
+paramsLength :: MacroParam -> Int
+paramsLength (Param _ remain) = 1 + paramsLength remain
+paramsLength VarArgs = 1
+paramsLength EndOfParams = 0
+
+-- | Checks if argument list has either same length with @MacroParam@, 
+--   or has same or larger length than @MacroParam@ (if @MacroParam@ ends with VarArgs)
+applicable :: [[Token]] -> MacroParam -> Bool
+applicable tks macroParams
+    | hasVarArgs macroParams && tksLen >= paramsLen = True
+    | tksLen == paramsLen = True
+    | otherwise = False
+    where
+        tksLen = length tks
+        paramsLen = paramsLength macroParams
 
 data Def
     = Alias DefName [Token]
