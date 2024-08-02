@@ -1,13 +1,23 @@
 module CppExp.Parser (module CppExp.Parser) where
 
 import Prelude hiding (fail)
-import CppExp.Data (PState, MacroParam (..), Def (Alias, Macro), Var, mapVar, defineSym, newState, defineMacroParams)
+import CppExp.Data (
+    PState (PState), 
+    MacroParam (..), 
+    Def (..), 
+    Var, 
+    mapVar, 
+    defineSym, 
+    newState, 
+    defineMacroParams, 
+    removeAlias, 
+    removeMacro
+    )
 import Data.Char (isAlphaNum, isAlpha)
-import CppExp.Token (Token (..), tokenToString)
+import CppExp.Token (Token (..), tokenToString, tokensToString)
 import qualified Data.Bifunctor as Bifunctor
-import CppExp.Utils (uncurry3r)
-import CppExp.Replace (tryReplace)
-import Data.Maybe (fromMaybe)
+import CppExp.Utils (uncurry3r, (!?))
+import Data.List (elemIndex)
 
 type Parser a s b = ([a], s) -> [(([a], s), b)]
 
@@ -73,7 +83,10 @@ sp p = p . Bifunctor.first (dropWhile (== ' '))
 just :: Parser a s r -> Parser a s r
 just p = filter (null . fst . fst) . p
 
-infixr 5 <@, <@?, <@-, <@~, <@=, <@?=
+infixr 5 @>, <@, <@?, <@-, <@~, <@=, <@?=
+
+(@>) :: Parser a s r -> v -> Parser a s v
+(p @> f) xs = [(ys, f) | (ys, _) <- p xs]
 
 -- Result transformer
 (<@) :: Parser a s r -> (r -> v) -> Parser a s v
@@ -125,6 +138,8 @@ first p xs | null r = []
 
 type CppParser r = Parser Char PState r
 
+-- Token Parsers
+
 newline :: CppParser ()
 newline = symbol '\n' &> epsilon
 
@@ -157,16 +172,74 @@ identRemain = satisfy isAlphaNum
 ident :: CppParser String
 ident = first $ identStart <&> many identRemain <@ uncurry (:)
 
-ppToken :: CppParser Token
-ppToken = comma &> succeed Comma
-        <|> ident <@ Ident
+-- Pure token parsers
+-- (Parsers that always produces tokens without triggering additional actions)
+pureAnyToken :: CppParser Token
+pureAnyToken = symbol '<' @> OpenBracket
+             <|> symbol '>' @> CloseBracket
+             <|> symbol '[' @> OpenSquare
+             <|> symbol ']' @> CloseSquare
+             <|> symbol '+' @> Plus
+             <|> symbol '-' @> Minus
+             <|> symbol '*' @> Mult
+             <|> symbol '/' @> Divide
 
-identReplacable :: CppParser [Token]
-identReplacable state@(_, pstate)
-        = first
-        ( sp ident <&> sp lparen &> sp macroArgs <& sp rparen <@? (\(macroName, args) -> tryReplace macroName (Just args) pstate)
-        <|> sp ident <@? (\aliasName -> tryReplace aliasName Nothing pstate)
-        ) state
+-- | Accepts any legal tokens with few exceptions:
+--   @Ident@ 
+anyToken :: CppParser Token
+anyToken = newline @> Newline
+         <|> backslash @> Backslash
+         <|> directiveStart @> DirectiveStart
+         <|> ellipsis @> Ellipsis
+         <|> comma @> Comma
+         <|> lparen @> OpenParethesis
+         <|> rparen @> CloseParenthesis
+         <|> pureAnyToken
+-- | Accpets any token in
+ppToken :: CppParser Token
+ppToken = ident <@ Ident
+        <|> pureAnyToken
+
+-- Expandable parsers
+
+-- | Tries to expand a potential alias / macro. Returns @Just@ if expansion succeed, 
+--   otherwise @Nothing@.
+tryExpand :: String -> Maybe [[Token]] -> PState -> Maybe [Token]
+tryExpand defName args pst
+    = case args of
+        Just args' -> let macro = removeMacro defName pst in
+            case macro of
+                Just (Macro _ params tks, pst') ->
+                    let result = expandMacro tks args' (defineMacroParams params pst') in
+                        case result of
+                            Just tks' -> Just $ snd $ head $ just cpp (tokensToString tks', pst')
+                            Nothing   -> Nothing
+                _                               -> Nothing
+        Nothing    -> let alias = removeAlias defName pst in
+            case alias of
+                Just (Alias _ tks, pst') ->
+                    Just $ snd $ head $ just cpp (tokensToString tks, pst')
+                _                     -> Nothing
+
+expandMacro :: [Either Token Var] -> [[Token]] -> PState -> Maybe [Token]
+expandMacro [] _ _ = Just []
+expandMacro (Right var : tks) args pst@(PState _ vs)
+    = case arg of
+        Just rp -> (rp ++) <$> expandMacro tks args pst
+        Nothing -> Nothing
+    where
+        idx = elemIndex var vs
+        arg = idx >>= (args !?)
+expandMacro (Left tk : tks) args pst
+    = (tk :) <$> expandMacro tks args pst
+
+identExpandable :: CppParser [Token]
+identExpandable state@(_, pstate)
+    = first
+    ( sp ident <&> sp lparen &> sp macroArgs <& sp rparen <@? (\(macroName, args) -> tryExpand macroName (Just args) pstate)
+    <|> sp ident <@? (\aliasName -> tryExpand aliasName Nothing pstate)
+    <|> sp ident <@ pure . Ident
+    ) state
 
 macroArgs :: CppParser [[Token]]
 macroArgs = sp macroArgAnyToken <&> sp comma &> macroArgs <@ uncurry (:)
@@ -174,39 +247,39 @@ macroArgs = sp macroArgAnyToken <&> sp comma &> macroArgs <@ uncurry (:)
 
 macroArgAnyToken :: CppParser [Token]
 macroArgAnyToken
-        = lparen &> macroArgAnyToken <&> rparen &> macroArgAnyToken <@ (\(inner, outer) -> OpenParethesis : inner ++ [CloseParenthesis] ++ outer)
-        <|> ident <&> macroArgAnyToken <@ uncurry (:) . Bifunctor.first Ident
-        <|> succeed []
+    = macroArgParenStrictMatch <&> macroArgAnyToken <@ uncurry (++)
+    <|> succeed []
 
--- | Accepts any legal tokens with few exceptions:
---   @Ident@ 
-anyToken :: CppParser Token
-anyToken = newline &> succeed Newline
-         <|> backslash &> succeed Backslash
-         <|> directiveStart &> succeed DirectiveStart
-         <|> ellipsis &> succeed Ellipsis
-         <|> comma &> succeed Comma
-         <|> lparen &> succeed OpenParethesis
-         <|> rparen &> succeed CloseParenthesis
+macroArgParenStrictMatch :: CppParser [Token]
+macroArgParenStrictMatch
+    = sp lparen &> macroArgAnyToken <& sp rparen <@
+        (\inner -> OpenParethesis : inner ++ [CloseParenthesis])
+    <|> macroArgAnyToken' <@ pure
+
+macroArgAnyToken' :: CppParser Token
+macroArgAnyToken'
+    = sp ident <@ Ident
+     <|> sp pureAnyToken
 
 macroParams :: CppParser MacroParam
 macroParams = macroParams' <@= (\(pst, params) -> (defineMacroParams params pst, params))
 
 macroParams' :: CppParser MacroParam
-macroParams' = sp ellipsis &> succeed VarArgs
+macroParams' = sp ellipsis @> VarArgs
             <|> sp ident <&> sp comma &> macroParams <@ uncurry Param
             <|> sp ident <@ flip Param EndOfParams
 
 aliasTkList :: CppParser [Token]
-aliasTkList = sp newline  &> succeed []
+aliasTkList = sp newline @> []
+            <|> sp backslash &> sp newline &> aliasTkList
             <|> sp ppToken <&> sp aliasTkList <@ uncurry (:)
 
 macroTkList :: CppParser [Either Token Var]
 macroTkList state@(_, pstate)
-        = sp newline <@ const []
-        <|> sp backslash &> sp newline &> macroTkList
-        <|> sp ppToken <&> macroTkList <@ uncurry (:) . Bifunctor.first (`mapVar` pstate)
-        $ state
+    = sp newline @> []
+    <|> sp backslash &> sp newline &> macroTkList
+    <|> sp ppToken <&> macroTkList <@ uncurry (:) . Bifunctor.first (`mapVar` pstate)
+    $ state
 
 macroDef :: CppParser Def
 macroDef = first
@@ -218,7 +291,7 @@ directive = sp (token "define") &> macroDef <@= (\(s, def) -> (defineSym def s, 
 
 cpp :: CppParser [Token]
 cpp = sp directiveStart &> directive &> cpp
-    <|> identReplacable <&> cpp <@ uncurry (++)
+    <|> identExpandable <&> cpp <@ uncurry (++)
     <|> sp anyToken <&> cpp <@ uncurry (:)
     <|> succeed []
 

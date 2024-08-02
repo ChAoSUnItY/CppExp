@@ -1,9 +1,19 @@
-module CppExp.Data (module CppExp.Data) where
+module CppExp.Data (
+    PState (PState), 
+    MacroParam (..), 
+    Def (..), 
+    Var, 
+    mapVar, 
+    defineSym, 
+    newState, 
+    defineMacroParams, 
+    removeAlias, 
+    removeMacro
+) where
 
 import CppExp.Token (Token (..))
 import Data.List (find)
 import CppExp.Utils (removeFirst)
-import Control.Monad (liftM2)
 import Data.Bifunctor (Bifunctor(second))
 
 type Var = String
@@ -43,22 +53,22 @@ getDefName :: Def -> DefName
 getDefName (Alias name _) = name
 getDefName (Macro name _ _) = name
 
-type SymTable = [Def]
+type SymTable = [(String, Def)]
 
 findDef' :: DefName -> SymTable -> Maybe Def
-findDef' defName = find ((== defName) . getDefName)
+findDef' = lookup
 
 findDefByPred' :: (Def -> Bool) -> DefName -> SymTable -> Maybe Def
-findDefByPred' p defName = find(liftM2 (&&) p ((== defName) . getDefName))
-
-removeDef' :: DefName -> SymTable -> Maybe (Def, SymTable)
-removeDef' defName st
-    = case def of
-        Just def' -> Just (def', st')
-        Nothing   -> Nothing
+findDefByPred' p defName st =
+    case def of
+        Just def' ->
+            if p def' then
+                Just def'
+            else
+                Nothing
+        Nothing -> Nothing
     where
         def = findDef' defName st
-        st' = removeFirst ((== defName) . getDefName) st 
 
 removeDefByPred' :: (Def -> Bool) -> DefName -> SymTable -> Maybe (Def, SymTable)
 removeDefByPred' p defName st
@@ -67,7 +77,7 @@ removeDefByPred' p defName st
         Nothing  -> Nothing
     where
         def = findDefByPred' p defName st
-        st' = removeFirst (liftM2 (&&) p ((== defName) . getDefName)) st
+        st' = removeFirst ((== defName) . fst) st
 
 type VarScope = [Var]
 
@@ -76,13 +86,6 @@ data PState = PState SymTable VarScope
 
 newState :: PState
 newState = PState [] []
-
-findDef :: String -> PState -> Maybe Def
-findDef ident (PState st _) = findDef' ident st
-
-removeDef :: DefName -> PState -> Maybe (Def, PState)
-removeDef defName (PState st vs)
-    = removeDef' defName st >>= Just . second (`PState` vs)
 
 removeDefByPred :: (Def -> Bool) -> DefName -> PState -> Maybe (Def, PState)
 removeDefByPred p defName (PState st vs)
@@ -110,4 +113,7 @@ defineMacroParams :: MacroParam -> PState -> PState
 defineMacroParams macroParams = defineVars (collectVars macroParams)
 
 defineSym :: Def -> PState -> PState
-defineSym def (PState st vs) = PState (def : st) vs
+defineSym def (PState st vs) = PState ((defName, def) : st') vs
+    where
+        defName = getDefName def
+        st' = removeFirst ((== defName) . fst) st
