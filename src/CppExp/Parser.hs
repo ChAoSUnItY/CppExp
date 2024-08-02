@@ -17,7 +17,7 @@ import Data.Char (isAlphaNum, isAlpha)
 import CppExp.Token (Token (..), tokenToString, tokensToString)
 import qualified Data.Bifunctor as Bifunctor
 import CppExp.Utils (uncurry3r, (!?))
-import Data.List (elemIndex)
+import Data.List (elemIndex, intercalate)
 
 type Parser a s b = ([a], s) -> [(([a], s), b)]
 
@@ -198,6 +198,8 @@ anyToken = newline @> Newline
 -- | Accpets any token in
 ppToken :: CppParser Token
 ppToken = ident <@ Ident
+        <|> lparen @> OpenParethesis
+        <|> rparen @> CloseParenthesis
         <|> pureAnyToken
 
 -- Expandable parsers
@@ -213,7 +215,7 @@ tryExpand defName args pst
                     if applicable args' params then
                         let result = expandMacro tks args' (defineMacroParams params pst') in
                             case result of
-                                Just tks' -> 
+                                Just tks' ->
                                     Just $ snd $ head $ just cpp (tokensToString tks', pst')
                                 Nothing   -> Nothing
                     else
@@ -233,7 +235,10 @@ expandMacro (Right var : tks) args pst@(PState _ vs)
         Nothing -> Nothing
     where
         idx = elemIndex var vs
-        arg = idx >>= (args !?)
+        arg = if var == "__VAR_ARGS__" then
+            intercalate [Comma] . flip drop args <$> idx
+        else
+            idx >>= (args !?)
 expandMacro (Left tk : tks) args pst
     = (tk :) <$> expandMacro tks args pst
 
